@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 8
+names: ['Envelope', 'Mouse', 'PEN', 'Stapler', 'handsanitizer', 'keyboard', 'knife', 'sanitizer']
+
+roboflow:
+  workspace: officeitems-detection
+  project: object-detection-wyaci
+  version: 2
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/officeitems-detection/object-detection-wyaci/dataset/2
