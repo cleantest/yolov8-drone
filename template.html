@@ -1,0 +1,45 @@
+<!-- Header Section -->
+<div class="header">
+    <h1>🎯 Office Item Detector</h1>
+    <p>Upload an image or use your camera to detect office items in real-time</p>
+</div>
+
+<!-- Image Upload Tab Content -->
+<template id="image-upload-tab">
+    <div class="input-container">
+        <div class="image-input-area">
+            {image_input}
+        </div>
+        <div class="controls-row">
+            {confidence_slider}
+            {detect_button}
+        </div>
+        <div class="results-area">
+            {output_image}
+            {detection_summary}
+        </div>
+    </div>
+</template>
+
+<!-- Live Camera Tab Content -->
+<template id="live-camera-tab">
+    <div class="input-container">
+        <div class="camera-controls">
+            <div class="settings-row">
+                {confidence_slider}
+                {camera_index}
+            </div>
+            <div class="action-buttons">
+                {start_button}
+                {stop_button}
+            </div>
+            {status_display}
+        </div>
+    </div>
+</template>
+
+<!-- Footer Section -->
+<footer class="footer">
+    <p>Using YOLOv8 model: {model_name}</p>
+    <p>© 2025 Office Item Detection System</p>
+</footer>
