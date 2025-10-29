@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Office Item Detector</title>
+    <script src="https://unpkg.com/vue@2/dist/vue.js"></script>
+    <link href="./style.css" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="container">
+                <h1> Office Item Detector</h1>
+                <p>Powered by YOLOv8</p>
+            </div>
+        </header>
+
+        <!-- Main content -->
+        <main class="container">
+            <!-- Tab navigation -->
+            <div class="tabs">
+                <button 
+                    class="tab-btn" 
+                    :class="{ active: activeTab === 'upload' }"
+                    @click="activeTab = 'upload'"
+                >
+                    📁 Upload Image
+                </button>
+                
+                <button 
+                    class="tab-btn" 
+                    :class="{ active: activeTab === 'camera' }"
+                    @click="activeTab = 'camera'"
+                >
+                    📹 Live Camera
+                </button>
+            </div>
+
+            <!-- Upload tab -->
+            <div v-show="activeTab === 'upload'" class="tab-content">
+                <!-- Upload area -->
+                <div 
+                    class="upload-area" 
+                    :class="{ 'drag-over': isDragOver }" 
+                    @drop="handleDrop" 
+                    @dragover.prevent="isDragOver = true"
+                    @dragleave="isDragOver = false"
+                    @click="$refs.fileInput.click()"
+                >
+                    <div v-if="!selectedImage" class="upload-placeholder">
+                        <div class="upload-icon">📁</div>
+                        <p>Click to select an image</p>
+                        <small>JPG, PNG, GIF supported</small>
+                    </div>
+                    
+                    <img v-if="selectedImage" :src="selectedImage" alt="Selected image" class="preview-image">
+                    <input ref="fileInput" type="file" accept="image/*" @change="handleFileSelect" style="display: none;">
+                </div>
+
+                <!-- Detect button -->
+                <div class="controls">
+                    <button 
+                        class="btn btn-primary" 
+                        @click="detectObjects"
+                        :disabled="!selectedImage || isProcessing"
+                    >
+                        <span v-if="!isProcessing">🔍 Detect Objects</span>
+                        <span v-if="isProcessing">⏳ Detecting...</span>
+                    </button>
+                </div>
+
+                <!-- Results -->
+                <div v-if="detectionResult" class="results">
+                    <div class="result-image">
+                        <img :src="detectionResult.image" alt="Detection result">
+                    </div>
+                    
+                    <div class="result-summary">
+                        <h3>Detection Results</h3>
+                        <div v-if="detectionResult.objects.length > 0" class="detected-objects">
+                            <div v-for="obj in detectionResult.objects" :key="obj.id" class="object-tag">
+                                <span class="object-name">{{ obj.name }}</span>
+                                <span class="object-confidence">{{ obj.confidence }}%</span>
+                            </div>
+                        </div>
+                        <p v-else class="no-objects">No objects detected</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Camera tab -->
+            <div v-show="activeTab === 'camera'" class="tab-content">
+                <div class="camera-controls">
+                    <button 
+                        class="btn btn-success" 
+                        @click="startCamera"
+                        :disabled="isCameraRunning"
+                    >
+                        ▶️ Start Camera
+                    </button>
+                    
+                    <button 
+                        class="btn btn-danger" 
+                        @click="stopCamera"
+                        :disabled="!isCameraRunning"
+                    >
+                        ⏹️ Stop Camera
+                    </button>
+                </div>
+
+                <div class="camera-status">
+                    <div class="status-indicator" :class="{ active: isCameraRunning }">
+                        <span class="status-dot">●</span>
+                        {{ cameraStatus }}
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="container">
+                <p>Detects: Envelope, Mouse, Stapler, Sanitizer, Boxcutter, Smartphone</p>
+            </div>
+        </footer>
+    </div>
+
+    <script src="./app.js"></script>
+</body>
+</html>
