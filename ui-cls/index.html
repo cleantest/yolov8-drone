@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO Classification - Office Items</title>
+    <link rel="stylesheet" href="style.css">
+    <meta name="description" content="Classify office items using YOLO deep learning model">
+    
+    <!-- Vue 2 CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.7.14/dist/vue.js"></script>
+    <!-- Axios for HTTP requests -->
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.5.0/dist/axios.min.js"></script>
+</head>
+<body>
+    <!-- Vue app container -->
+    <div id="app">
+        <!-- Header Section -->
+        <header class="header">
+            <div class="container">
+                <h1 class="title"> YOLO Image Classification</h1>
+                <p class="subtitle">Powered By Yolo-Cls</p>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <div class="container">
+                
+                <!-- Controls Section -->
+                <div class="controls-grid">
+                    <!-- Image Upload Card -->
+                    <div class="card">
+                        <h2 class="card-title"> Upload Image</h2>
+                        <div class="upload-area" @click="triggerFileInput" @dragover.prevent @drop="handleDrop">
+                            <input 
+                                ref="fileInput" 
+                                type="file" 
+                                accept="image/*" 
+                                @change="handleFileSelect" 
+                                style="display: none"
+                            >
+                            <div v-if="!selectedFile" class="upload-placeholder">
+                                <div class="upload-icon">📷</div>
+                                <p>Click to select or drag & drop an image</p>
+                            </div>
+                            <div v-else class="file-selected">
+                                <p>{{ selectedFile.name }}</p>
+                                <button @click.stop="clearFile" class="clear-btn">✕</button>
+                            </div>
+                        </div>
+                        <button 
+                            @click="classifyImage" 
+                            :disabled="!selectedFile || isClassifying"
+                            class="btn btn-primary"
+                        >
+                            <span v-if="isClassifying">Classifying...</span>
+                            <span v-else>Classify Image</span>
+                        </button>
+                    </div>
+
+                    <!-- Camera Card -->
+                    <div class="card">
+                        <h2 class="card-title">📹 Live Camera</h2>
+                        <div class="camera-info">
+                            <p>Real-time classification using your camera</p>
+                            <p class="camera-note">Opens in a separate window</p>
+                        </div>
+                        <div class="camera-controls">
+                            <button 
+                                @click="startCamera" 
+                                :disabled="cameraRunning"
+                                class="btn btn-success"
+                            >
+                                Start Camera
+                            </button>
+                            <button 
+                                @click="stopCamera" 
+                                :disabled="!cameraRunning"
+                                class="btn btn-danger"
+                            >
+                                Stop Camera
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Results Section -->
+                <div class="results-grid">
+                    <!-- Image Display -->
+                    <div class="card">
+                        <h3 class="card-title">🖼️ Image Preview</h3>
+                        <div class="image-container">
+                            <img 
+                                v-if="previewImage" 
+                                :src="previewImage" 
+                                alt="Preview" 
+                                class="preview-image"
+                            >
+                            <div v-else class="image-placeholder">
+                                <div class="placeholder-icon">🖼️</div>
+                                <p>{{ imageStatus }}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Predictions -->
+                    <div class="card">
+                        <h3 class="card-title">🏆 Classification Results</h3>
+                        <div class="predictions-container">
+                            <div v-if="predictions.length === 0" class="no-results">
+                                <div class="no-results-icon">🤔</div>
+                                <p>No predictions yet - upload an image to get started</p>
+                            </div>
+                            <div v-else class="predictions-list">
+                                <div 
+                                    v-for="(prediction, index) in predictions" 
+                                    :key="index"
+                                    class="prediction-item"
+                                    :class="{ 'top-prediction': index === 0 }"
+                                >
+                                    <span class="prediction-class">{{ prediction.class }}</span>
+                                    <div class="confidence-container">
+                                        <span class="confidence-text">{{ prediction.confidence }}%</span>
+                                        <div class="confidence-bar">
+                                            <div 
+                                                class="confidence-fill" 
+                                                :style="{ width: prediction.confidence + '%' }"
+                                            ></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Classes Info -->
+                <div class="card classes-card">
+                    <h3 class="card-title">📋 Available Classes</h3>
+                    <p class="classes-description">The model can classify these office items:</p>
+                    <div class="classes-container">
+                        <div v-if="classes.length === 0" class="loading-classes">
+                            Loading classes...
+                        </div>
+                        <div v-else class="classes-list">
+                            <span 
+                                v-for="className in classes" 
+                                :key="className"
+                                class="class-tag"
+                            >
+                                {{ className }}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Status Messages -->
+                <div v-if="statusMessage" class="status-message" :class="statusType">
+                    <div class="status-content">
+                        <span v-if="isLoading" class="loading-spinner"></span>
+                        {{ statusMessage }}
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Vue app initialization -->
+    <script src="app.js"></script>
+</body>
+</html>
