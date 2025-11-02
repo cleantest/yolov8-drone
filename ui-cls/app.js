@@ -1,11 +1,5 @@
-/**
- * YOLO Classification Vue 2 App
- * 
- * Simple Vue 2 application for image classification using YOLO
- * Handles file uploads, camera controls, and displays results
- * 
- * Created for office item classification project - 2024
- */
+// YOLO Classification Vue App
+// Handles file uploads, camera controls, and displays results
 
 // Vue 2 app instance
 new Vue({
@@ -14,30 +8,38 @@ new Vue({
     // File handling
     selectedFile: null,
     previewImage: null,
-    
+
     // Classification state
     isClassifying: false,
     predictions: [],
-    
+
     // Camera state
     cameraRunning: false,
-    
+    cameraFeedUrl: '/video_feed',
+
+    // Detection state
+    latestDetection: { class: '', confidence: 0, timestamp: 0 },
+    detectionHistory: [],
+
+    // Alert state
+    showDetectionAlert: false,
+    alertDetection: { class: '', confidence: 0 },
+
     // UI state
     statusMessage: '',
     statusType: 'info', // 'info', 'success', 'error'
     isLoading: false,
     imageStatus: 'Select an image to classify',
-    
+
     // Model info
     classes: []
   },
-  
+
   mounted() {
-    // Load available classes when component mounts
     this.loadClasses();
-    console.log('🎯 YOLO Classification Vue app started');
+    console.log('YOLO Classification app started');
   },
-  
+
   methods: {
     /**
      * Trigger the hidden file input when upload area is clicked
@@ -45,7 +47,7 @@ new Vue({
     triggerFileInput() {
       this.$refs.fileInput.click();
     },
-    
+
     /**
      * Handle file selection from input
      */
@@ -55,7 +57,7 @@ new Vue({
         this.setSelectedFile(file);
       }
     },
-    
+
     /**
      * Handle drag and drop file selection
      */
@@ -66,7 +68,7 @@ new Vue({
         this.setSelectedFile(files[0]);
       }
     },
-    
+
     /**
      * Set the selected file and create preview
      */
@@ -76,9 +78,9 @@ new Vue({
         this.showStatus('Please select an image file', 'error');
         return;
       }
-      
+
       this.selectedFile = file;
-      
+
       // Create preview
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -86,11 +88,11 @@ new Vue({
         this.imageStatus = 'Image loaded - click Classify to analyze';
       };
       reader.readAsDataURL(file);
-      
+
       // Clear previous predictions
       this.predictions = [];
     },
-    
+
     /**
      * Clear the selected file
      */
@@ -101,41 +103,41 @@ new Vue({
       this.imageStatus = 'Select an image to classify';
       this.$refs.fileInput.value = '';
     },
-    
+
     /**
      * Send image to backend for classification
      */
     async classifyImage() {
       if (!this.selectedFile) return;
-      
+
       this.isClassifying = true;
       this.showStatus('Classifying image...', 'info', true);
-      
+
       try {
         const formData = new FormData();
         formData.append('image', this.selectedFile);
-        
+
         const response = await axios.post('/api/classify', formData, {
           headers: {
             'Content-Type': 'multipart/form-data'
           }
         });
-        
+
         if (response.data.error) {
           throw new Error(response.data.error);
         }
-        
+
         // Update predictions
         this.predictions = response.data.predictions || [];
-        
+
         // Update preview image if server sent one back
         if (response.data.image) {
           this.previewImage = response.data.image;
         }
-        
+
         this.imageStatus = 'Classification complete';
         this.showStatus('Classification complete!', 'success');
-        
+
       } catch (error) {
         console.error('Classification error:', error);
         const errorMsg = error.response?.data?.error || error.message;
@@ -144,48 +146,136 @@ new Vue({
         this.isClassifying = false;
       }
     },
-    
+
+
+
     /**
      * Start live camera classification
      */
     async startCamera() {
       this.showStatus('Starting camera...', 'info', true);
-      
+
       try {
         const response = await axios.post('/api/start-camera');
-        
-        if (response.data.status.includes('started')) {
-          this.cameraRunning = true;
-          this.showStatus('Camera started! Look for the camera window.', 'success');
-        } else {
-          this.showStatus(response.data.status, 'info');
-        }
-        
+        this.cameraRunning = true;
+        this.cameraFeedUrl = '/video_feed?' + new Date().getTime(); // Force refresh
+        this.showStatus('Camera started!', 'success');
+
+        // Start polling for detections
+        this.startDetectionPolling();
+
       } catch (error) {
         console.error('Camera start error:', error);
         const errorMsg = error.response?.data?.error || error.message;
         this.showStatus(`Error starting camera: ${errorMsg}`, 'error');
       }
     },
-    
+
     /**
      * Stop live camera classification
      */
     async stopCamera() {
       this.showStatus('Stopping camera...', 'info', true);
-      
+
       try {
         await axios.post('/api/stop-camera');
         this.cameraRunning = false;
+        this.cameraFeedUrl = '/video_feed?' + new Date().getTime(); // Force refresh
         this.showStatus('Camera stopped', 'success');
-        
+
+        // Stop polling for detections
+        this.stopDetectionPolling();
+
       } catch (error) {
         console.error('Camera stop error:', error);
         const errorMsg = error.response?.data?.error || error.message;
         this.showStatus(`Error stopping camera: ${errorMsg}`, 'error');
       }
     },
-    
+
+    /**
+     * Start polling for high-confidence detections and camera status
+     */
+    startDetectionPolling() {
+      this.detectionInterval = setInterval(async () => {
+        try {
+          // Get detections
+          const detectionsResponse = await axios.get('/api/detections');
+          const newLatest = detectionsResponse.data.latest;
+
+          // Check if there's a new detection to show alert for
+          if (newLatest.class && newLatest.timestamp !== this.latestDetection.timestamp) {
+            this.showDetectionAlert = true;
+            this.alertDetection = {
+              class: newLatest.class,
+              confidence: newLatest.confidence
+            };
+
+            // Auto-dismiss alert after 5 seconds
+            setTimeout(() => {
+              this.showDetectionAlert = false;
+            }, 5000);
+          }
+
+          this.latestDetection = newLatest;
+          this.detectionHistory = detectionsResponse.data.history;
+
+          // Check camera status (auto-stop detection)
+          const statusResponse = await axios.get('/api/camera-status');
+          if (!statusResponse.data.running && this.cameraRunning) {
+            // Camera was auto-stopped due to high confidence detection
+            this.cameraRunning = false;
+            this.cameraFeedUrl = '/video_feed?' + new Date().getTime();
+            this.showStatus('Camera auto-stopped after high confidence detection!', 'success');
+            this.stopDetectionPolling();
+          }
+        } catch (error) {
+          console.error('Error fetching detections:', error);
+        }
+      }, 1000); // Poll every second
+    },
+
+    /**
+     * Stop polling for detections
+     */
+    stopDetectionPolling() {
+      if (this.detectionInterval) {
+        clearInterval(this.detectionInterval);
+        this.detectionInterval = null;
+      }
+    },
+
+    /**
+     * Clear detection history
+     */
+    async clearDetections() {
+      try {
+        await axios.post('/api/clear-detections');
+        this.latestDetection = { class: '', confidence: 0, timestamp: 0 };
+        this.detectionHistory = [];
+        this.showStatus('Detection history cleared', 'success');
+      } catch (error) {
+        console.error('Error clearing detections:', error);
+        this.showStatus('Error clearing detections', 'error');
+      }
+    },
+
+    /**
+     * Format timestamp for display
+     */
+    formatTime(timestamp) {
+      if (!timestamp) return '';
+      const date = new Date(timestamp * 1000);
+      return date.toLocaleTimeString();
+    },
+
+    /**
+     * Dismiss the detection alert
+     */
+    dismissAlert() {
+      this.showDetectionAlert = false;
+    },
+
     /**
      * Load available classes from the backend
      */
@@ -198,7 +288,7 @@ new Vue({
         this.classes = [];
       }
     },
-    
+
     /**
      * Show status message to user
      */
@@ -206,7 +296,7 @@ new Vue({
       this.statusMessage = message;
       this.statusType = type;
       this.isLoading = loading;
-      
+
       // Auto-hide non-loading messages
       if (!loading) {
         setTimeout(() => {

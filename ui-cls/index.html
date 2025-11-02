@@ -1,24 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YOLO Classification - Office Items</title>
     <link rel="stylesheet" href="style.css">
     <meta name="description" content="Classify office items using YOLO deep learning model">
-    
+
     <!-- Vue 2 CDN -->
     <script src="https://cdn.jsdelivr.net/npm/vue@2.7.14/dist/vue.js"></script>
     <!-- Axios for HTTP requests -->
     <script src="https://cdn.jsdelivr.net/npm/axios@1.5.0/dist/axios.min.js"></script>
 </head>
+
 <body>
     <!-- Vue app container -->
     <div id="app">
         <!-- Header Section -->
         <header class="header">
             <div class="container">
-                <h1 class="title"> YOLO Image Classification</h1>
+                <h1 class="title">YOLO Image Classification</h1>
                 <p class="subtitle">Powered By Yolo-Cls</p>
             </div>
         </header>
@@ -26,20 +28,15 @@
         <!-- Main Content -->
         <main class="main">
             <div class="container">
-                
+
                 <!-- Controls Section -->
                 <div class="controls-grid">
                     <!-- Image Upload Card -->
                     <div class="card">
-                        <h2 class="card-title"> Upload Image</h2>
+                        <h2 class="card-title">Upload Image</h2>
                         <div class="upload-area" @click="triggerFileInput" @dragover.prevent @drop="handleDrop">
-                            <input 
-                                ref="fileInput" 
-                                type="file" 
-                                accept="image/*" 
-                                @change="handleFileSelect" 
-                                style="display: none"
-                            >
+                            <input ref="fileInput" type="file" accept="image/*" @change="handleFileSelect"
+                                style="display: none">
                             <div v-if="!selectedFile" class="upload-placeholder">
                                 <div class="upload-icon">📷</div>
                                 <p>Click to select or drag & drop an image</p>
@@ -49,39 +46,28 @@
                                 <button @click.stop="clearFile" class="clear-btn">✕</button>
                             </div>
                         </div>
-                        <button 
-                            @click="classifyImage" 
-                            :disabled="!selectedFile || isClassifying"
-                            class="btn btn-primary"
-                        >
+                        <button @click="classifyImage" :disabled="!selectedFile || isClassifying"
+                            class="btn btn-primary">
                             <span v-if="isClassifying">Classifying...</span>
                             <span v-else>Classify Image</span>
                         </button>
                     </div>
 
-                    <!-- Camera Card -->
+                    <!-- Live Camera Card -->
                     <div class="card">
-                        <h2 class="card-title">📹 Live Camera</h2>
-                        <div class="camera-info">
-                            <p>Real-time classification using your camera</p>
-                            <p class="camera-note">Opens in a separate window</p>
+                        <h2 class="card-title">Live Camera</h2>
+                        <div class="camera-container">
+                            <img :src="cameraFeedUrl" alt="Live Camera Feed" class="camera-feed">
                         </div>
                         <div class="camera-controls">
-                            <button 
-                                @click="startCamera" 
-                                :disabled="cameraRunning"
-                                class="btn btn-success"
-                            >
+                            <button @click="startCamera" :disabled="cameraRunning" class="btn btn-success">
                                 Start Camera
                             </button>
-                            <button 
-                                @click="stopCamera" 
-                                :disabled="!cameraRunning"
-                                class="btn btn-danger"
-                            >
+                            <button @click="stopCamera" :disabled="!cameraRunning" class="btn btn-danger">
                                 Stop Camera
                             </button>
                         </div>
+                        <p class="camera-note">Live classification with your camera</p>
                     </div>
                 </div>
 
@@ -89,16 +75,11 @@
                 <div class="results-grid">
                     <!-- Image Display -->
                     <div class="card">
-                        <h3 class="card-title">🖼️ Image Preview</h3>
+                        <h3 class="card-title">Image Preview</h3>
                         <div class="image-container">
-                            <img 
-                                v-if="previewImage" 
-                                :src="previewImage" 
-                                alt="Preview" 
-                                class="preview-image"
-                            >
+                            <img v-if="previewImage" :src="previewImage" alt="Preview" class="preview-image">
                             <div v-else class="image-placeholder">
-                                <div class="placeholder-icon">🖼️</div>
+                                <div class="placeholder-icon">📷</div>
                                 <p>{{ imageStatus }}</p>
                             </div>
                         </div>
@@ -106,27 +87,20 @@
 
                     <!-- Predictions -->
                     <div class="card">
-                        <h3 class="card-title">🏆 Classification Results</h3>
+                        <h3 class="card-title">Classification Results</h3>
                         <div class="predictions-container">
                             <div v-if="predictions.length === 0" class="no-results">
-                                <div class="no-results-icon">🤔</div>
+                                <div class="no-results-icon">?</div>
                                 <p>No predictions yet - upload an image to get started</p>
                             </div>
                             <div v-else class="predictions-list">
-                                <div 
-                                    v-for="(prediction, index) in predictions" 
-                                    :key="index"
-                                    class="prediction-item"
-                                    :class="{ 'top-prediction': index === 0 }"
-                                >
-                                    <span class="prediction-class">{{ prediction.class }}</span>
+                                <div class="prediction-item top-prediction">
+                                    <span class="prediction-class">{{ predictions[0].class }}</span>
                                     <div class="confidence-container">
-                                        <span class="confidence-text">{{ prediction.confidence }}%</span>
+                                        <span class="confidence-text">{{ predictions[0].confidence }}%</span>
                                         <div class="confidence-bar">
-                                            <div 
-                                                class="confidence-fill" 
-                                                :style="{ width: prediction.confidence + '%' }"
-                                            ></div>
+                                            <div class="confidence-fill"
+                                                :style="{ width: predictions[0].confidence + '%' }"></div>
                                         </div>
                                     </div>
                                 </div>
@@ -135,23 +109,48 @@
                     </div>
                 </div>
 
-                <!-- Classes Info -->
-                <div class="card classes-card">
-                    <h3 class="card-title">📋 Available Classes</h3>
-                    <p class="classes-description">The model can classify these office items:</p>
-                    <div class="classes-container">
-                        <div v-if="classes.length === 0" class="loading-classes">
-                            Loading classes...
+                <!-- High Confidence Detections -->
+                <div class="card" v-if="cameraRunning">
+                    <h3 class="card-title">High Confidence Detections (>80%, excluding background)</h3>
+                    <div class="detections-container">
+                        <div v-if="latestDetection.class" class="latest-detection">
+                            <h4>Latest Detection:</h4>
+                            <div class="detection-item high-confidence">
+                                <span class="detection-class">{{ latestDetection.class }}</span>
+                                <span class="detection-confidence">{{ latestDetection.confidence }}%</span>
+                                <span class="detection-time">{{ formatTime(latestDetection.timestamp) }}</span>
+                            </div>
                         </div>
-                        <div v-else class="classes-list">
-                            <span 
-                                v-for="className in classes" 
-                                :key="className"
-                                class="class-tag"
-                            >
-                                {{ className }}
-                            </span>
+
+                        <div v-if="detectionHistory.length > 0" class="detection-history">
+                            <h4>Recent Detections:</h4>
+                            <div class="detection-list">
+                                <div v-for="(detection, index) in detectionHistory.slice().reverse()" :key="index"
+                                    class="detection-item">
+                                    <span class="detection-class">{{ detection.class }}</span>
+                                    <span class="detection-confidence">{{ detection.confidence }}%</span>
+                                    <span class="detection-time">{{ formatTime(detection.timestamp) }}</span>
+                                </div>
+                            </div>
+                            <button @click="clearDetections" class="btn btn-secondary">Clear History</button>
                         </div>
+
+                        <div v-if="!latestDetection.class && detectionHistory.length === 0" class="no-detections">
+                            <p>No high-confidence detections yet. Point camera at objects for classification.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- High Confidence Alert -->
+                <div v-if="showDetectionAlert" class="detection-alert">
+                    <div class="alert-content">
+                        <div class="alert-icon">✓</div>
+                        <div class="alert-text">
+                            <h2>Object Detected!</h2>
+                            <p class="detected-class">{{ alertDetection.class }}</p>
+                            <p class="detected-confidence">{{ alertDetection.confidence }}% confidence</p>
+                        </div>
+                        <button @click="dismissAlert" class="alert-close">×</button>
                     </div>
                 </div>
 
@@ -170,4 +169,5 @@
     <!-- Vue app initialization -->
     <script src="app.js"></script>
 </body>
+
 </html>

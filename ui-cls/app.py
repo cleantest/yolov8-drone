@@ -1,14 +1,11 @@
 """
 YOLO Classification Web Server
 
-This Flask app provides a web interface for image classification using YOLO.
-It supports both image upload and live camera classification.
-
-Author: Created for office item classification project
-Date: 2024
+Flask backend for image classification using YOLO models.
+Supports both image upload and live camera streaming with real-time classification.
 """
 
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, Response
 from flask_cors import CORS
 import cv2
 import numpy as np
@@ -22,74 +19,53 @@ from ultralytics import YOLO
 import warnings
 import os
 
-# Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", category=UserWarning)
-
-# Set environment variable to allow unsafe loading (PyTorch 2.6 compatibility)
 os.environ['TORCH_WEIGHTS_ONLY'] = 'False'
 
-# Fix for numpy array issue in torchvision transforms
 def patch_torchvision():
-    """Patch torchvision to handle numpy arrays properly"""
+    """Fix torchvision transforms to handle numpy arrays"""
     try:
         import torchvision.transforms._functional_pil as F_pil
         from PIL import Image
         
-        # Store original function
         original_get_dimensions = F_pil.get_dimensions
         
         def patched_get_dimensions(img):
-            # Convert numpy array to PIL Image if needed
             if isinstance(img, np.ndarray):
-                if img.ndim == 3 and img.shape[2] == 3:  # RGB image
+                if img.ndim == 3 and img.shape[2] == 3:
                     img = Image.fromarray(img.astype('uint8'))
-                elif img.ndim == 2:  # Grayscale image
+                elif img.ndim == 2:
                     img = Image.fromarray(img.astype('uint8'), mode='L')
                 else:
-                    # Fallback: try to convert anyway
                     img = Image.fromarray(img.astype('uint8'))
-            
             return original_get_dimensions(img)
         
-        # Apply the patch
         F_pil.get_dimensions = patched_get_dimensions
-        print("✅ Applied torchvision numpy array compatibility patch")
+
         
     except Exception as e:
-        print(f"⚠️  Could not apply torchvision patch: {e}")
+        pass
 
-# Apply the patch at import time
 patch_torchvision()
 
-# Initialize Flask app with CORS for web requests
 app = Flask(__name__)
 CORS(app)
 
-# Global variables - keeping it simple for this demo
-model = None  # Will hold our loaded YOLO model
-camera_thread = None  # Thread for camera processing
-stop_camera = threading.Event()  # Signal to stop camera thread
+model = None
+camera_thread = None
+stop_camera = threading.Event()
+
+camera_running = False
+cap = None
+latest_detection = {"class": "", "confidence": 0, "timestamp": 0}
+detection_history = []
 
 def get_model():
-    """
-    Load the YOLO classification model.
-    
-    This function tries to find a trained model in common locations,
-    falling back to a pretrained model if needed. It also handles
-    PyTorch 2.6 compatibility issues with model loading.
-    
-    Returns:
-        YOLO: Loaded YOLO classification model
-    """
+    """Load the YOLO classification model"""
     global model
     
-    # Only load once - reuse the same model instance
     if model is None:
-        # Find the trained model in possible locations
         possible_paths = [
-            os.path.join("..", "runs", "classify", "train2", "weights", "best.pt"),
-            os.path.join("runs", "classify", "train2", "weights", "best.pt"),
-            os.path.join("..", "..", "runs", "classify", "train2", "weights", "best.pt"),
             "runs/classify/train2/weights/best.pt",
             "../runs/classify/train2/weights/best.pt"
         ]
@@ -100,197 +76,185 @@ def get_model():
                 model_path = path
                 break
         
-        if model_path is None or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Classification model not found at {model_path}. Please train your model first.")
+        if model_path is None:
+            raise FileNotFoundError("Classification model not found. Please train your model first.")
         
-        # Handle PyTorch 2.6 compatibility - use weights_only=False
         try:
-            print("   Loading YOLO model with PyTorch 2.6 compatibility...")
-            
-            # Store original torch.load function
             original_load = torch.load
             
-            # Create a wrapper that always uses weights_only=False
             def safe_load(*args, **kwargs):
                 kwargs['weights_only'] = False
                 return original_load(*args, **kwargs)
             
-            # Temporarily replace torch.load
             torch.load = safe_load
-            
-            # Load the YOLO model
             model = YOLO(model_path)
-            
-            # Restore original torch.load
             torch.load = original_load
-            
-            print("   ✅ Model loaded successfully")
             
         except Exception as e:
-            # Make sure to restore torch.load even if there's an error
             torch.load = original_load
-            print(f"   ❌ Model loading failed: {e}")
             raise Exception(f"Could not load YOLO model: {e}")
-        
-        print(f"✅ Successfully loaded model: {model_path}")
-        print(f"📋 Available classes: {list(model.names.values())}")
     
     return model
 
 def image_to_base64(img):
-    """
-    Convert a PIL Image to base64 string for web display.
-    
-    This is needed because we can't directly send image files to the browser,
-    so we encode them as base64 strings that can be embedded in HTML.
-    
-    Args:
-        img (PIL.Image): The image to convert
-        
-    Returns:
-        str: Base64 encoded image with data URL prefix
-    """
-    # Create a bytes buffer to hold the image data
+    """Convert PIL Image to base64 string for web display"""
     buffer = io.BytesIO()
-    
-    # Save the image to the buffer as PNG
     img.save(buffer, format="PNG")
-    
-    # Encode as base64 and create a data URL
     img_data = base64.b64encode(buffer.getvalue()).decode()
     return f"data:image/png;base64,{img_data}"
 
-def camera_loop():
-    """
-    Main loop for live camera classification.
-    Captures frames and runs YOLO classification continuously.
-    """
+def classify_frame(frame):
+    try:
+        yolo = get_model()
+        
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(frame_rgb.astype('uint8'))
+        
+        if pil_image.mode != 'RGB':
+            pil_image = pil_image.convert('RGB')
+
+        temp_path = "temp_camera_frame.jpg"
+        pil_image.save(temp_path)
+        
+        try:
+            from ultralytics.models.yolo.classify.predict import ClassificationPredictor
+            
+            original_preprocess = ClassificationPredictor.preprocess
+            
+            def patched_preprocess(self, img):
+                if isinstance(img, list):
+                    processed_imgs = []
+                    for im in img:
+                        if isinstance(im, np.ndarray):
+                            if im.ndim == 3:
+                                im = Image.fromarray(im.astype('uint8'))
+                            elif im.ndim == 2:
+                                im = Image.fromarray(im.astype('uint8'), mode='L')
+                        processed_imgs.append(im)
+                    img = processed_imgs
+                elif isinstance(img, np.ndarray):
+                    if img.ndim == 3:
+                        img = Image.fromarray(img.astype('uint8'))
+                    elif img.ndim == 2:
+                        img = Image.fromarray(img.astype('uint8'), mode='L')
+                
+                return original_preprocess(self, img)
+            
+            ClassificationPredictor.preprocess = patched_preprocess
+            results = yolo.predict(temp_path, verbose=False)
+            ClassificationPredictor.preprocess = original_preprocess
+            
+            if results and hasattr(results[0], "probs"):
+                probs = results[0].probs
+                idx = int(probs.top1.item()) if hasattr(probs.top1, "item") else int(probs.top1)
+                conf = float(probs.top1conf.item()) if hasattr(probs.top1conf, "item") else float(probs.top1conf)
+                class_name = yolo.names[idx]
+                return class_name, conf
+                
+        finally:
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+
+    except Exception as e:
+        print(f"Error in camera classification: {e}")
+    
+    return "unknown", 0.0
+
+def generate_frames():
+    """Generate camera frames for browser streaming with detection"""
+    global cap, camera_running, latest_detection, detection_history
+    
     yolo = get_model()
     cap = cv2.VideoCapture(0)
     
     if not cap.isOpened():
-        print(" Could not access camera")
+        print("Could not access camera")
+        camera_running = False
         return
     
-    print("📹 Camera started successfully - Press 'q' in the camera window to stop")
+
+    frame_count = 0
+    last_high_confidence_time = 0
     
-    window_name = "Live Classification - Press 'q' to stop"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    
-    while not stop_camera.is_set():
-        ret, frame = cap.read()
-        if not ret:
-            print("Failed to read from camera")
+    while camera_running:
+        success, frame = cap.read()
+        if not success:
+            print("Failed to read camera frame")
             break
+        
+        frame_count += 1
         
         try:
-            # Convert BGR to RGB and to PIL Image
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(frame_rgb)
+            if frame_count % 10 == 0:
+                class_name, confidence = classify_frame(frame)
+                
+                if confidence > 0.8 and class_name.lower() != "background":
+                    import time
+                    current_timestamp = time.time()
+                    
+                    if current_timestamp - last_high_confidence_time > 3:
+                        latest_detection = {
+                            "class": class_name,
+                            "confidence": round(confidence * 100, 1),
+                            "timestamp": current_timestamp
+                        }
+                        
+                        detection_history.append(latest_detection.copy())
+                        
+                        if len(detection_history) > 10:
+                            detection_history.pop(0)
+                        
+                        last_high_confidence_time = current_timestamp
 
-            # Manual inference path: preprocess and run model directly
-            try:
-                from torchvision import transforms
-
-                preprocess = transforms.Compose([
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                ])
-
-                input_tensor = preprocess(pil_image).unsqueeze(0)
-
-                # Move tensor to model device
-                try:
-                    model_params = list(yolo.model.parameters())
-                    device = model_params[0].device if len(model_params) > 0 else torch.device('cpu')
-                except Exception:
-                    device = torch.device('cpu')
-
-                input_tensor = input_tensor.to(device)
-
-                with torch.no_grad():
-                    outputs = yolo.model(input_tensor)
-
-                # Extract logits/tensor
-                logits = outputs[0] if isinstance(outputs, (list, tuple)) else outputs
-                probs_tensor = torch.softmax(logits, dim=1)[0]
-
-                top5conf, top5 = torch.topk(probs_tensor, min(5, probs_tensor.numel()))
-                top1 = top5[0]
-                top1conf = top5conf[0]
-
-                # Build a lightweight result object compatible with existing code
-                class Probs:
-                    pass
-
-                class Result:
-                    pass
-
-                p = Probs()
-                p.top5 = top5
-                p.top5conf = top5conf
-                p.top1 = top1
-                p.top1conf = top1conf
-
-                res = Result()
-                res.probs = p
-                results = [res]
-
-            except Exception as inner_e:
-                print(f"Manual inference failed: {inner_e}")
-                # Fallback: attempt predict with temporary file as before
-                try:
-                    temp_path = "temp_frame.jpg"
-                    pil_image.save(temp_path)
-                    results = yolo.predict(source=temp_path, verbose=False)
-                finally:
-                    try:
-                        os.remove(temp_path)
-                    except:
-                        pass
-
-            # Check if we got valid results and draw
-            if results and len(results) > 0 and hasattr(results[0], 'probs'):
-                top_class_idx = results[0].probs.top1
-                # top1 may be a tensor -> convert
-                try:
-                    top_idx = int(top_class_idx.item()) if hasattr(top_class_idx, 'item') else int(top_class_idx)
-                except Exception:
-                    top_idx = int(top_class_idx)
-
-                try:
-                    confidence = float(results[0].probs.top1conf.item()) if hasattr(results[0].probs.top1conf, 'item') else float(results[0].probs.top1conf)
-                except Exception:
-                    confidence = 0.0
-
-                class_name = yolo.names[top_idx]
-                text = f"{class_name}: {confidence:.2f}"
-                cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-            cv2.imshow(window_name, frame)
-
-        except Exception as e:
-            print(f"Error in camera loop: {e}")
+                        camera_running = False
+                        break
+                
+                if confidence > 0.1:
+                    label = f"{class_name}: {confidence*100:.1f}%"
+                    
+                    if class_name.lower() == "background":
+                        color = (128, 128, 128)
+                    elif confidence > 0.8:
+                        color = (0, 255, 0)
+                    else:
+                        color = (0, 255, 255)
+                    
+                    text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+                    cv2.rectangle(frame, (10, 10), (text_size[0] + 20, text_size[1] + 30), (0, 0, 0), -1)
+                    cv2.putText(frame, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                    
+                    if confidence > 0.8 and class_name.lower() != "background":
+                        cv2.putText(frame, "HIGH CONFIDENCE!", (15, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    elif class_name.lower() == "background":
+                        cv2.putText(frame, "Searching for objects...", (15, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (128, 128, 128), 2)
         
-        # Check for 'q' key to quit
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-    
-    # Clean up camera resources
-    cap.release()
-    cv2.destroyAllWindows()
-    print("📹 Camera stopped and resources cleaned up")
+        except Exception as e:
+            print(f"Classification error: {e}")
+            cv2.putText(frame, "Classification Error", (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-# Web routes for serving the frontend
+        ret, buffer = cv2.imencode(".jpg", frame)
+        if not ret:
+            continue
+
+        yield (b"--frame\r\n"
+               b"Content-Type: image/jpeg\r\n\r\n" +
+               buffer.tobytes() + b"\r\n")
+
+    if cap is not None:
+        cap.release()
+        cap = None
+
+
+
+
 @app.route('/')
 def home():
-    """Serve the main HTML page"""
     return send_from_directory('.', 'index.html')
 
 @app.route('/<path:filename>')
 def files(filename):
-    """Serve static files (CSS, JS, etc.)"""
     return send_from_directory('.', filename)
 
 # API endpoints
@@ -443,40 +407,37 @@ def classify():
                 'predictions': []
             })
         
-        # Extract the top 5 predictions
+        # Extract only the top prediction (highest confidence)
         predictions = []
-        num_predictions = min(5, len(probs.top5))
         
-        for i in range(num_predictions):
-            try:
-                # Handle both tensor and numpy array types
-                class_idx_raw = probs.top5[i]
-                confidence_raw = probs.top5conf[i]
-                
-                # Convert to Python native types
-                if hasattr(class_idx_raw, 'item'):
-                    class_idx = int(class_idx_raw.item())
-                else:
-                    class_idx = int(class_idx_raw)
-                
-                if hasattr(confidence_raw, 'item'):
-                    confidence = float(confidence_raw.item())
-                else:
-                    confidence = float(confidence_raw)
-                
-                # Get class name safely
-                class_name = str(yolo.names[class_idx])
-                
-                predictions.append({
-                    'class': class_name,
-                    'confidence': round(confidence * 100, 1)  # Convert to percentage
-                })
-                
-            except Exception as pred_error:
-                print(f"Error processing prediction {i}: {pred_error}")
-                print(f"  class_idx type: {type(probs.top5[i])}")
-                print(f"  confidence type: {type(probs.top5conf[i])}")
-                continue
+        try:
+            # Get the top prediction only
+            class_idx_raw = probs.top1
+            confidence_raw = probs.top1conf
+            
+            # Convert to Python native types
+            if hasattr(class_idx_raw, 'item'):
+                class_idx = int(class_idx_raw.item())
+            else:
+                class_idx = int(class_idx_raw)
+            
+            if hasattr(confidence_raw, 'item'):
+                confidence = float(confidence_raw.item())
+            else:
+                confidence = float(confidence_raw)
+            
+            # Get class name safely
+            class_name = str(yolo.names[class_idx])
+            
+            predictions.append({
+                'class': class_name,
+                'confidence': round(confidence * 100, 1)  # Convert to percentage
+            })
+            
+        except Exception as pred_error:
+            print(f"Error processing top prediction: {pred_error}")
+            print(f"  class_idx type: {type(probs.top1)}")
+            print(f"  confidence type: {type(probs.top1conf)}")
         
         # Return the results
         return jsonify({
@@ -496,50 +457,57 @@ def classify():
         
         return jsonify({'error': f"Classification failed: {str(e)}"}), 500
 
+@app.route('/video_feed')
+def video_feed():
+    global camera_running
+    if camera_running:
+        return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    else:
+        placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(placeholder, "Click Start Camera", (150, 220), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        cv2.putText(placeholder, "to begin live classification", (120, 260), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        ret, buffer = cv2.imencode('.jpg', placeholder)
+        return Response(buffer.tobytes(), mimetype='image/jpeg')
+
 @app.route('/api/start-camera', methods=['POST'])
 def start_camera():
-    """
-    Start the live camera classification in a separate thread.
-    
-    This opens a camera window that shows live classification results.
-    Only one camera session can run at a time.
-    """
-    global camera_thread
-    
-    # Check if camera is already running
-    if camera_thread and camera_thread.is_alive():
-        return jsonify({'status': 'Camera already running'})
-    
-    # Reset the stop signal and start a new camera thread
-    stop_camera.clear()
-    camera_thread = threading.Thread(target=camera_loop, daemon=True)
-    camera_thread.start()
-    
+    global camera_running
+    camera_running = True
+
     return jsonify({'status': 'Camera started'})
 
 @app.route('/api/stop-camera', methods=['POST'])
-def stop_camera_route():
-    """
-    Stop the live camera classification.
-    
-    This signals the camera thread to stop and waits for it to finish.
-    """
-    # Signal the camera thread to stop
-    stop_camera.set()
-    
-    # Wait for the thread to finish (with timeout to avoid hanging)
-    if camera_thread:
-        camera_thread.join(timeout=2)
-    
+def stop_camera_api():
+    global camera_running, cap
+    camera_running = False
+    if cap is not None:
+        cap.release()
+        cap = None
+
     return jsonify({'status': 'Camera stopped'})
+
+@app.route('/api/camera-status', methods=['GET'])
+def get_camera_status():
+    global camera_running
+    return jsonify({'running': camera_running})
+
+@app.route('/api/detections', methods=['GET'])
+def get_detections():
+    global detection_history, latest_detection
+    return jsonify({
+        'latest': latest_detection,
+        'history': detection_history
+    })
+
+@app.route('/api/clear-detections', methods=['POST'])
+def clear_detections():
+    global detection_history, latest_detection
+    detection_history.clear()
+    latest_detection = {"class": "", "confidence": 0, "timestamp": 0}
+    return jsonify({'status': 'Detections cleared'})
 
 @app.route('/api/classes', methods=['GET'])
 def get_classes():
-    """
-    Get the list of classes that the model can classify.
-    
-    This is useful for the frontend to display available classes.
-    """
     try:
         yolo = get_model()
         class_names = list(yolo.names.values())
@@ -548,30 +516,6 @@ def get_classes():
         print(f"Error getting classes: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# Main entry point
 if __name__ == '__main__':
-    print("🎯 YOLO Classification Web Server")
-    print("=" * 50)
-    print("📂 Expected classes: background, boxcutter, envelope, mouse,")
-    print("                    sanitizer, smartphone, stapler")
-    print("🌐 Server will be available at: http://localhost:5001")
-    print("📹 Camera classification opens in a separate OpenCV window")
-    print("⚠️  Make sure your camera is connected for live classification")
-    print("=" * 50)
-    
-    # Test model loading at startup
-    try:
-        print("\n🔍 Testing model loading...")
-        test_model = get_model()
-        print(f"✅ Model loaded successfully with {len(test_model.names)} classes")
-    except Exception as e:
-        print(f"❌ Model loading failed: {e}")
-        print("Please check your model file and try again.")
-        exit(1)
-    
-    print("\n🚀 Starting Flask server...")
-    
-    # Start the Flask development server
-    # debug=True enables auto-reload during development
-    # host='0.0.0.0' allows access from other devices on the network
+    get_model()
     app.run(debug=True, host='0.0.0.0', port=5001)
