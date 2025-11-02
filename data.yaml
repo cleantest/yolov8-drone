@@ -1,0 +1,15 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 7
+names: ['envelope', 'boxcutter', 'mouse', 'sanitizer', 'smartphone', 'stapler', 'background']
+
+
+roboflow:
+  workspace: officeitems-detection
+  project: new_dataset-4-nwazg
+  version: 1
+  license: CC BY 4.0
+url: https://app.roboflow.com/officeitems-detection/new_dataset-4-nwazg/2
+
